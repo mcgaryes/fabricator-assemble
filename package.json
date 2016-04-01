@@ -1,6 +1,6 @@
 {
   "name": "fabricator-assemble",
-  "version": "1.1.11",
+  "version": "1.1.9",
   "description": "The assembly engine behind Fabricator",
   "main": "index.js",
   "engines": {
@@ -13,26 +13,44 @@
   "keywords": [
     "fabricator"
   ],
-  "author": "Luke Askew",
+  "author": {
+    "name": "Luke Askew"
+  },
   "license": "MIT",
-  "repository": "fbrctr/fabricator-assemble",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/fbrctr/fabricator-assemble"
+  },
   "dependencies": {
     "chalk": "^1.0.0",
-    "globby": "^2.1.0",
-    "gray-matter": "^2.0.1",
+    "globby": "^2.0.0",
+    "gray-matter": "^2.0.0",
     "handlebars": "^3.0.3",
     "i": "^0.3.3",
-    "js-beautify": "^1.5.10",
-    "js-yaml": "^3.4.0",
-    "lodash": "^3.10.1",
-    "markdown-it": "^4.4.0",
+    "js-beautify": "^1.5.5",
+    "js-yaml": "^3.2.7",
+    "lodash": "^3.8.0",
+    "markdown-it": "^4.2.1",
     "mkdirp": "^0.5.0",
+    "rimraf": "",
     "sort-object": "^1.0.0"
   },
   "devDependencies": {
-    "del": "^2.0.1",
+    "del": "^1.1.1",
     "helper-markdown": "^0.1.1",
     "html-minifier": "^0.7.2",
     "mocha": "^2.1.0"
-  }
+  },
+  "readme": "# Fabricator Assemble\n\n[![Build Status](https://travis-ci.org/fbrctr/fabricator-assemble.svg?branch=master)](https://travis-ci.org/fbrctr/fabricator-assemble) [![npm version](https://badge.fury.io/js/fabricator-assemble.svg)](http://badge.fury.io/js/fabricator-assemble)\n\n> The assembly engine behind Fabricator. Not associated with [Assemble](http://assemble.io).\n\nTurn this:\n\n```html\n---\ntitle: Document Name\nname: World\n---\n\n<h1>{{home.greeting}}, {{name}}!</h1>\n\n{{> button}}\n```\n\ninto this:\n\n```html\n<!doctype html>\n<html lang=\"en\">\n<head>\n    <title>Document Name</title>\n</head>\n<body>\n\n    <h1>Hello, World!</h1>\n\n    <a href=\"#\" class=\"button\">Click me!</a>\n\n</body>\n</html>\n```\n\n## Usage\n\nThe task returns a promise, so it can be used in an async task runner, like Gulp:\n\n```js\nvar assemble = require('fabricator-assemble');\nvar gulp = require('gulp');\n\ngulp.task('assemble', function () {\n\treturn assemble(options);\n});\n```\n\nThe task accepts options, but assumes this directory structure:\n\n```\n└── src\n\t├── data\n\t│   └── *.{json,yml}\n\t├── docs\n\t│   └── *.md\n\t├── materials\n\t│   └── components\n\t│       └── *.html\n\t└── views\n\t    ├── *.html\n\t    └── layouts\n\t        └── default.html\n```\n\n## Options\n\nDefault options:\n\n```\n{\n\tlayout: 'default',\n\tlayouts: 'src/views/layouts/*',\n\tlayoutIncludes: 'src/views/layouts/includes/*',\n\tviews: ['src/views/**/*', '!src/views/+(layouts)/**'],\n\tmaterials: 'src/materials/**/*',\n\tdata: 'src/data/**/*.{json,yml}',\n\tdocs: 'src/docs/**/*.md',\n\tkeys: {\n\t\tmaterials: 'materials',\n\t\tviews: 'views',\n\t\tdocs: 'docs'\n\t}\n\thelpers: {},\n\tlogErrors: false,\n\tonError: function(error) {},\n\tdest: 'dist'\n}\n```\n\n### options.layout\n\nType: `String`  \nDefault: `default`\n\nName of the default layout template. \n\n### options.layouts\n\nType: `String` or `Array`  \nDefault: `src/views/layouts/*`\n\nFiles to use as layout templates.\n\n### options.layoutIncludes\n\nType: `String` or `Array`  \nDefault: `src/views/layouts/includes/*`\n\nFiles to use as layout includes.\n\n### options.views\n\nType: `String` or `Array`  \nDefault: `['src/views/**/*', '!src/views/+(layouts)/**']`\n\nPages to pass through the assembler to be templated. Fabricator pages are stored at the root level `views` and user-defined views can be stored in subdirectories.\n\n### options.materials\n\nType: `String` or `Array`  \nDefault: `src/materials/**/*`\n\nFiles to use a partials/helpers. These are the materials that make up your toolkit. by default, Fabricator comes with \"components\" and \"structures\", but you can define your own taxonomy.\n\n### options.data\n\nType: `String` or `Array`  \nDefault: `src/data/**/*.{json,yml}`\n\nJSON or YAML files to use as data for views.\n\n### options.docs\n\nType: `String` or `Array`  \nDefault: `src/docs/**/*.md`\n\nMarkdown files containing toolkit-wide documentation\n\n### options.keys\n\nType: `Objects`  \nDefault: `materials/views/docs`\n\nObject keywords for accessing \"materials\", \"views\", and \"docs\" in a view templating context. Fabricator uses some specific terms like \"materials\" to describe what are really \"partials\" in Handelbars. This option give you the flexibility to define your own terms for `materials`, `views`, and `docs`.\n\nFor example:\n\n```\nassemble({\n\tkeys: {\n\t\tmaterials: 'patterns'\n\t}\n});\n``` \n\n```\n<!-- formerly `{{#each materials}}` -->\n{{#each patterns}}\n\n\t<h1>{{name}}</h1>\n\n\t{{#each items}}\n\t\t<h2>{{name}}</h2>\n\t{{/each}}\n\n{{/each}}\n```\n\n**Note**: this will also change the built-in `{{material <foo>}}` helper to use the **singular** form of whatever is defined for the `materials` key. e.g. `materialKey: 'patterns'` -> `{{pattern <foo>}}`. If you set a new key for `materials`, you will also need to update the `f-item-content.html` include to use the new helper name.\n\n### options.helpers\n\nType: `Object`  \nDefault: `{}`\n\nUser-defined helpers. E.g.:\n\n```javascript\nhelpers: {\n\tmarkdown: require('helper-markdown'),\n\tfoo: function () {\n\t\treturn 'bar';\n\t}\n}\n```\n\n### options.logErrors\n\nType: `Boolean`  \nDefault: `false`\n\nWhether or not to log errors to console. If set to false, the app will exit on error.\n\n### options.onError\n\nType: `Function`  \nDefault: `null`\n\nError handler function. Receives an `error` object param.\n\n### options.dest\n\nType: `String`  \nDefault: `dist`\n\nDestination of compiled views (where files are saved to)\n\n## Usage\n\n### Definitions\n\n- **Layouts**: wrapper templates\n- **Views**: individual pages\n- **Materials**: partial views; registered as \"partials\" and \"helpers\" in Handlebars\n- **Data**: Data piped in as template context\n- **Docs**: Markdown files containing documentation.\n\n#### Layouts\n\nLayouts are wrappers for pages. You can define as many layouts as you want by creating `.html` files in your layouts folder.\n\nExample layout:\n\n```html\n<!doctype html>\n<html lang=\"en\">\n<head>\n    <title>{{title}}</title>\n</head>\n<body>\n\n    {% body %}\n\n</body>\n</html>\n```\n\nPage content is inserted in the `{% body %}` placeholder.\n\nContext can be passed from a page to the layout via front matter.\n\nThe layout a page uses is also defined in front matter:\n\n```html\n---\nlayout: custom-layout\ntitle: My Custom Layout\n---\n```\n\nThis would use `custom-layout.html`.\n\nWhen no `layout` property is defined, the page uses the `default` layout.\n\n#### Views\n\nViews are unique pages templated using Handlebars. These are both Fabricator pages and user-created pages (i.e. example templates)\n\nView example:\n\n```html\n---\ntitle: Document Name\nname: World\n---\n\n<h1>{{home.greeting}}, {{name}}!</h1>\n\n{{> button}}\n\n```\n\nThis outputs a page that uses the default layout (since no layout was defined).\n\nThe front matter block at the top provides context to both the layout and the page itself.\n\nContext is also piped in from data files (see below). In this example, `{{home.greeting}}` refers to the `greeting` property in `home.json`.\n\nFabricator pages are typically stored at the root level of the `views` directory and user-created views (e.g. \"templates\", \"pages\", \"interfaces\") should be stored in subdirectories.\n\n#### Materials\n\nMaterials are partial templates; think of them as the materials used to build pages. \n\nThey are accessed as a \"partial\" using the `>` syntax in Handlebars:\n\n```html\n{{> material-name}}\n```\n\nAny file in the glob defined in `options.materials` is turned into a partial/helper and can be accessed as such. For example, assume the `components` contains materials:\n\n```\n└── components\n    ├── button.html\n    └── form-toggle.html\n```\n\nThe content within these files can be accessed as such:\n\n```html\n{{> button}}\n{{> form-toggle}}\n```\n\n#### Ordering\n\nYou can manually order materials by prefixing the file name with numbers:\n\n```\n01-foo.html\n01.01-bar.html\n02-qux.html\n```\n\nThis defines the order in which materials will appear in the side menu or other places the `materials.items` context is used.\n\n**Note**: The number prefixes are ignored when registering partials, so you'll still be able to access them using the material name per usual. e.g.:\n\n```\n{{> foo}}\n{{> bar}}\n{{> qux}}\n```\n\nThe numbers are also ignored in the `.name` property. The materials above would list as:\n\n```\nFoo\nBar\nQux\n```\n\n#### Data\n\nData is defined as JSON or YAML.\n\nThe `data` folder can contain several `.json` or `.yml` files:\n\n```\n└── data\n    ├── home.json\n    └── contact.yml\n```\n\n`home.json`:\n\n```json\n{\n  \"greeting\": \"Hello\"\n}\n```\n\nThe data within each file can be accessed using dot notation:\n\n```html\n{{home.greeting}}\n{{contact.propName}}\n```\n\n#### Docs\n\nDocs are just a generic way to capture toolkit documenation that's not specific to a material. This could be something like JavaScript architecture, accessibility guidelines, etc.\n\nDocs are written in markdown and are stored in `src/docs` by default.\n",
+  "readmeFilename": "README.md",
+  "bugs": {
+    "url": "https://github.com/fbrctr/fabricator-assemble/issues"
+  },
+  "homepage": "https://github.com/fbrctr/fabricator-assemble",
+  "_id": "fabricator-assemble@1.1.9",
+  "dist": {
+    "shasum": "d7afbd2b0928575941dcb511261cea434b7cb5d2"
+  },
+  "_from": "fabricator-assemble@^1.1.9",
+  "_resolved": "https://registry.npmjs.org/fabricator-assemble/-/fabricator-assemble-1.1.9.tgz"
 }
