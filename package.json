@@ -4,7 +4,7 @@
   "description": "The assembly engine behind Fabricator",
   "main": "index.js",
   "engines": {
-    "node": ">=0.10.0",
+    "node": ">=0.12.0",
     "npm": "^2.0.0"
   },
   "scripts": {
@@ -47,10 +47,4 @@
     "url": "https://github.com/fbrctr/fabricator-assemble/issues"
   },
   "homepage": "https://github.com/fbrctr/fabricator-assemble",
-  "_id": "fabricator-assemble@1.1.9",
-  "dist": {
-    "shasum": "d7afbd2b0928575941dcb511261cea434b7cb5d2"
-  },
-  "_from": "fabricator-assemble@^1.1.9",
-  "_resolved": "https://registry.npmjs.org/fabricator-assemble/-/fabricator-assemble-1.1.9.tgz"
 }
