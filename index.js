@@ -10,6 +10,7 @@ var matter = require('gray-matter');
 var md = require('markdown-it')({ html: true, linkify: true });
 var mkdirp = require('mkdirp');
 var path = require('path');
+var rmdir = require('rimraf');
 var sortObj = require('sort-object');
 var yaml = require('js-yaml');
 
@@ -97,7 +98,20 @@ var defaults = {
 	 * Whether or not to log errors to console
 	 * @type {Boolean}
 	 */
-	logErrors: false
+	logErrors: false,
+
+	/**
+	 * Whether or not to wrap partials in descriptive HTML comments
+	 * @type {Boolean}
+	 */
+	encloseInComments: false,
+
+	/**
+	 * Whether or not to wrap partials in a hard-resetting CSS container
+	 * @type {Boolean}
+	 */
+	wrapAndHardResetMaterials: false
+
 };
 
 
@@ -152,6 +166,20 @@ var assembly = {
 
 
 /**
+ * Filter a (presumed) filename
+ * @param  {String} name
+ * @example
+ * 'foo.html' -> 'foo'
+ * '02-bar.html' -> 'bar'
+ * @return {String}
+ */
+var filterName = function (name, preserveNumbers) {
+	// replace spaces with dashes; remove excluding underscores; trim
+	return ((preserveNumbers) ? name : name.replace(/(^[0-9|\.\-]+|)(__|)/, '')).trim().replace(/\s/g, '-');
+};
+
+
+/**
  * Get the name of a file (minus extension) from a path
  * @param  {String} filePath
  * @example
@@ -160,10 +188,22 @@ var assembly = {
  * @return {String}
  */
 var getName = function (filePath, preserveNumbers) {
-	// get name; replace spaces with dashes
-	var name = path.basename(filePath, path.extname(filePath)).replace(/\s/g, '-');
-	return (preserveNumbers) ? name : name.replace(/^[0-9|\.\-]+/, '');
+	var name = path.basename(filePath, path.extname(filePath));
+	return filterName(name, preserveNumbers);
+};
 
+
+/**
+ * See if transformed filename has leading "__" to hide it from the menu
+ * @param  {String} filePath
+ * @example
+ * './src/materials/structures/__foo.html' -> true
+ * './src/materials/structures/02-bar.html' -> false
+ * @return {Bool}
+ */
+var isExcluded = function (filePath) {
+	var name = path.basename(filePath);
+	return name.match(/(^[0-9\.]+|)(__)/, "") ? true : false;
 };
 
 
@@ -270,7 +310,7 @@ var parseMaterials = function () {
 	assembly.materials = {};
 
 	// get files and dirs
-	var files = globby.sync(options.materials, { nodir: true, nosort: true });
+	var files = globby.sync(options.materials, { nodir: true, nosort: true }).sort();
 
 	// build a glob for identifying directories
 	options.materials = (typeof options.materials === 'string') ? [options.materials] : options.materials;
@@ -281,32 +321,27 @@ var parseMaterials = function () {
 	// get all directories
 	// do a new glob; trailing slash matches only dirs
 	var dirs = globby.sync(dirsGlob).map(function (dir) {
-		return path.normalize(dir).split(path.sep).slice(-2, -1)[0];
+		return filterName(path.normalize(dir).split(/[/\\]/).slice(-2, -1)[0]);
 	});
 
 
 	// stub out an object for each collection and subCollection
 	files.forEach(function (file) {
 
-		var parent = getName(path.normalize(path.dirname(file)).split(path.sep).slice(-2, -1)[0], true);
-		var collection = getName(path.normalize(path.dirname(file)).split(path.sep).pop(), true);
-		var isSubCollection = (dirs.indexOf(parent) > -1);
+		var parent = filterName(path.normalize(path.dirname(file)).split(/[/\\]/).slice(-2, -1)[0]);
+		var collection = filterName(path.normalize(path.dirname(file)).split(/[/\\]/).pop());
+		var isSubCollection = (dirs.indexOf(getName(parent)) > -1);
 
 		// get the material base dir for stubbing out the base object for each category (e.g. component, structure)
 		var materialBase = (isSubCollection) ? parent : collection;
 
+
 		// stub the base object
 		assembly.materials[materialBase] = assembly.materials[materialBase] || {
-			name: toTitleCase(getName(materialBase)),
-			items: {}
+			name: toTitleCase(materialBase),
+			items: {},
+			exclude: isExcluded(path.normalize(path.dirname(file)))
 		};
-
-		if (isSubCollection) {
-			assembly.materials[parent].items[collection] = assembly.materials[parent].items[collection] || {
-				name: toTitleCase(getName(collection)),
-				items: {}
-			};
-		}
 
 	});
 
@@ -316,11 +351,20 @@ var parseMaterials = function () {
 
 		// get info
 		var fileMatter = getMatter(file);
-		var collection = getName(path.normalize(path.dirname(file)).split(path.sep).pop(), true);
-		var parent = path.normalize(path.dirname(file)).split(path.sep).slice(-2, -1)[0];
+		var collection = filterName(path.normalize(path.dirname(file)).split(/[/\\]/).pop());
+		var parent = filterName(path.normalize(path.dirname(file)).split(/[/\\]/).slice(-2, -1)[0]);
 		var isSubCollection = (dirs.indexOf(parent) > -1);
-		var id = (isSubCollection) ? getName(collection) + '.' + getName(file) : getName(file);
-		var key = (isSubCollection) ? collection + '.' + getName(file, true) : getName(file, true);
+		var id = ((isSubCollection) ? filterName(collection) + '.' + getName(file) : getName(file));
+		var key = (isSubCollection) ? filterName(collection) + '.' + getName(file) : getName(file);
+
+    // stub the sub-base object
+		if (isSubCollection) {
+			assembly.materials[parent].items[collection] = assembly.materials[parent].items[collection] || {
+				name: toTitleCase(collection),
+				items: {},
+				exclude: isExcluded(path.normalize(path.dirname(file)).split(/[/\\]/).pop())
+			};
+		}
 
 		// get material front-matter, omit `notes`
 		var localData = _.omit(fileMatter.data, 'notes');
@@ -334,13 +378,19 @@ var parseMaterials = function () {
 			assembly.materials[collection].items[key] = {
 				name: toTitleCase(id),
 				notes: (fileMatter.data.notes) ? md.render(fileMatter.data.notes) : '',
-				data: localData
+				data: localData,
+				exclude: isExcluded(file),
+				bundle: (fileMatter.data.bundle == true) ? true : false,
+				updated: fileMatter.data.updated
 			};
 		} else {
 			assembly.materials[parent].items[collection].items[key] = {
 				name: toTitleCase(id.split('.')[1]),
 				notes: (fileMatter.data.notes) ? md.render(fileMatter.data.notes) : '',
-				data: localData
+				data: localData,
+				exclude: isExcluded(file),
+				bundle: (fileMatter.data.bundle == true) ? true : false,
+				updated: fileMatter.data.updated
 			};
 		}
 
@@ -362,19 +412,347 @@ var parseMaterials = function () {
 			});
 		}
 
+    if (options.wrapAndHardResetMaterials) {
+
+      content = ("<div class=\"hard-reset\" data-toolkit>\n" + content + "\n</div>\n");
+
+    } // end if
+
+    content = options.encloseInComments ? ("<!-- START '" + id + "' -->\n" + content + "\n<!-- END '" + id + "' -->\n") : content;
+
 		// register the partial
 		Handlebars.registerPartial(id, content);
 
 	});
 
 
+	// iterate over each file (material) again and attempt to bundle individual materials
+	files.forEach(function (file) {
+
+		// get info
+		var collection = filterName(path.normalize(path.dirname(file)).split(/[/\\]/).pop());
+		var parent = filterName(path.normalize(path.dirname(file)).split(/[/\\]/).slice(-2, -1)[0]);
+		var isSubCollection = (dirs.indexOf(parent) > -1);
+		var id = ((isSubCollection) ? filterName(collection) + '.' + getName(file) : getName(file));
+		var key = (isSubCollection) ? filterName(collection) + '.' + getName(file) : getName(file);
+    var data;
+
+		// get data
+		if (!isSubCollection) {
+			data = assembly.materials[collection].items[key];
+		} else {
+			data = assembly.materials[parent].items[collection].items[key];
+		}
+
+    if (data && data.bundle) {
+
+      // get page gray matter and content
+      var pageMatter = getMatter(file),
+          baseName = filterName(path.basename(file, ".html"));
+
+      // write raw module
+      var source = "{{> " + key + " }}",
+          context = buildContext(data),
+          template = Handlebars.compile(source),
+          filePath = path.normalize(path.join(options.dest, "bundles", baseName, filterName(path.basename(file))));
+
+      // change extension to .html
+      filePath = filterName(filePath.replace(/\.[0-9a-z]+$/, ("." + (data.data.extension || "html"))));
+
+      // write file
+      mkdirp.sync(path.dirname(filePath));
+      fs.writeFileSync(filePath, template(context));
+
+      // write module example
+      // source = wrapPage("{{> " + key + " }}", assembly.layouts[pageMatter.data.layout || options.layout]);
+      // template = Handlebars.compile(source);
+      // filePath = path.normalize(path.join(options.dest, "bundles", baseName, "example", filterName(path.basename(file))));
+
+      // change extension to .html
+      // filePath = filterName(filePath.replace(/\.[0-9a-z]+$/, ("." + (data.data.extension || "html"))));
+
+      // write file
+      // mkdirp.sync(path.dirname(filePath));
+      // fs.writeFileSync(filePath, template(context));
+
+      // try to copy module css
+      try {
+
+        var source = path.normalize(path.join(options.dest, "assets", "toolkit", "styles", "bundles", baseName + ".css")),
+            dest = path.normalize(path.join(options.dest, "bundles", baseName, baseName + ".css"));
+
+        fs.writeFileSync(dest, fs.readFileSync(source));
+
+      } catch (e) {}
+
+      // try to copy module js
+      try {
+
+        var source = path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "bundles", baseName + ".js")),
+            dest = path.normalize(path.join(options.dest, "bundles", baseName, baseName + ".js"));
+
+        fs.writeFileSync(dest, fs.readFileSync(source));
+
+      } catch (e) {}
+
+      // try to copy toolkit css
+      try {
+
+        var source = path.normalize(path.join(options.dest, "assets", "toolkit", "styles", "toolkit.css")),
+            dest = path.normalize(path.join(options.dest, "bundles", baseName, "toolkit.css"));
+
+        fs.writeFileSync(dest, fs.readFileSync(source));
+
+      } catch (e) {}
+
+      // try to copy toolkit js
+      try {
+
+        var source = path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "toolkit.js")),
+            dest = path.normalize(path.join(options.dest, "bundles", baseName, "toolkit.js"));
+
+        fs.writeFileSync(dest, fs.readFileSync(source));
+
+      } catch (e) {}
+
+      // try to copy vendor css
+      try {
+
+        var source = path.normalize(path.join(options.dest, "assets", "toolkit", "styles", "vendor", "vendor.css")),
+            dest = path.normalize(path.join(options.dest, "bundles", baseName, "vendor.css"));
+
+        fs.writeFileSync(dest, fs.readFileSync(source));
+
+      } catch (e) {}
+
+      // try to copy vendor js
+      try {
+
+        var source = path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "vendor", "vendor.js")),
+            dest = path.normalize(path.join(options.dest, "bundles", baseName, "vendor.js"));
+
+        fs.writeFileSync(dest, fs.readFileSync(source));
+
+      } catch (e) {}
+
+      if (data.data.websphere && _.has(assembly.data, "globals")) { // IBM WebSphere Commerce bundling rules
+
+        if (!_.has(assembly.data.globals, "websphere_config")) {
+
+          console.log(chalk.bold.red("Error (websphere bundling): globals.websphere_config doesn't exist!"));
+
+        } // end if
+
+        var config = assembly.data.globals.websphere_config || {};
+
+        if (!_.has(config, "webcontent_folder") ||
+            !_.has(config, "widgets_namespace") ||
+            !_.has(config, "widget_prefix")) {
+
+          console.log(chalk.bold.red("Error (websphere bundling): globals.websphere_config is missing data"));
+
+        } else {
+
+          try {
+
+            var widget_name    = assembly.data.globals.websphere_config.widget_prefix + toTitleCase(baseName).replace(" ", "") + "Widget";
+            var widgets_folder = "Widgets-" + assembly.data.globals.websphere_config.webcontent_folder;
+
+            var widget_path = path.normalize(path.join(options.dest,
+                                                       "bundles",
+                                                       "websphere",
+                                                       "Stores",
+                                                       "WebContent",
+                                                       widgets_folder,
+                                                       assembly.data.globals.websphere_config.widgets_namespace + "." + widget_name));
+
+            var javascript_path = path.normalize(path.join(widget_path,
+                                                           "javascript"));
+
+            mkdirp.sync(javascript_path);
+
+            // try to write module JSPx's
+
+            var jsp = "\n\
+<%--  The following code is created as an example. Modify the generated code and add any additional required code.  --%>\n\
+<%-- BEGIN "+ widget_name +".jsp --%>\n\
+\n\
+<%@include file=\"/Widgets_701/Common/EnvironmentSetup.jspf\"%>\n\
+<fmt:setBundle basename=\"/"+ widgets_folder +"/Properties/"+ widget_name +"_text\" var=\""+ widget_name +"_text\" />\n\
+<c:set var=\"widgetPreviewText\" value=\"${"+ widget_name +"_text}\"/>\n\
+<c:set var=\"emptyWidget\" value=\"false\"/>\n\
+\n\
+<link rel=\"stylesheet\" href=\"/"+ widgets_folder + "/Common/styles/"+ baseName + ".css\">\n\
+\n\
+<%@include file=\""+ widget_name +"_Data.jspf\"%>\n\
+\n\
+\n\
+<%@ include file=\"/Widgets_701/Common/StorePreviewShowInfo_Start.jspf\" %>\n\
+\n\
+<%@ include file=\""+ widget_name +"_UI.jspf\"%>\n\
+\n\
+<%@ include file=\"/Widgets_701/Common/StorePreviewShowInfo_End.jspf\" %>\n\
+\n\
+<%-- END "+ widget_name +".jsp --%>\n\
+";
+
+            var dest = path.normalize(path.join(widget_path,
+                                                widget_name + ".jsp"));
+
+            fs.writeFileSync(dest, jsp);
+
+            var ui = "\n\
+<%--  The following code is created as an example. Modify the generated code and add any additional required code.  --%>\n\
+<div id=\"widgetExample\" >\n\
+"+ template(context) +"\n\
+</div>\n\
+";
+            var dest = path.normalize(path.join(widget_path,
+                                                widget_name + "_UI.jspf"));
+
+            fs.writeFileSync(dest, ui);
+
+            var dest = path.normalize(path.join(widget_path,
+                                                widget_name + "_Data.jspf"));
+
+            fs.writeFileSync(dest, '<%--  Add your data related code here --%>');
+
+            // try to copy module js
+            try {
+
+              var source = path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "bundles", baseName + ".js")),
+                  dest = path.normalize(path.join(javascript_path, baseName + ".js"));
+
+              fs.writeFileSync(dest, fs.readFileSync(source));
+
+            } catch (e) {}
+
+            var css_path = path.normalize(path.join(options.dest,
+                                                    "bundles",
+                                                    "websphere",
+                                                    "Stores",
+                                                    "WebContent",
+                                                    widgets_folder,
+                                                    "Common",
+                                                    "styles"));
+
+            mkdirp.sync(css_path);
+
+            var javascript_path = path.normalize(path.join(options.dest,
+                                                           "bundles",
+                                                           "websphere",
+                                                           "Stores",
+                                                           "WebContent",
+                                                           widgets_folder,
+                                                           "Common",
+                                                           "scripts"));
+
+            mkdirp.sync(javascript_path);
+
+            // try to copy module css
+            try {
+
+              var source = path.normalize(path.join(options.dest, "assets", "toolkit", "styles", "bundles", baseName + ".css")),
+                  dest = path.normalize(path.join(css_path, baseName + ".css"));
+
+              fs.writeFileSync(dest, fs.readFileSync(source));
+
+            } catch (e) {}
+
+            // try to copy toolkit css
+            try {
+
+              var source = path.normalize(path.join(options.dest, "assets", "toolkit", "styles", "toolkit.css")),
+                  dest = path.normalize(path.join(css_path, "toolkit.css"));
+
+              fs.writeFileSync(dest, fs.readFileSync(source));
+
+            } catch (e) {}
+
+            // try to copy vendor css
+            try {
+
+              var source = path.normalize(path.join(options.dest, "assets", "toolkit", "styles", "vendor", "vendor.css")),
+                  dest = path.normalize(path.join(css_path, "vendor.css"));
+
+              fs.writeFileSync(dest, fs.readFileSync(source));
+
+            } catch (e) {}
+
+            // try to copy toolkit js
+            try {
+
+              var source = path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "toolkit.js")),
+                  dest = path.normalize(path.join(javascript_path, "toolkit.js"));
+
+              fs.writeFileSync(dest, fs.readFileSync(source));
+
+            } catch (e) {}
+
+            // try to copy vendor js
+            try {
+
+              var source = path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "vendor", "vendor.js")),
+                  dest = path.normalize(path.join(javascript_path, "vendor.js"));
+
+              fs.writeFileSync(dest, fs.readFileSync(source));
+
+            } catch (e) {}
+
+            var images_path = path.normalize(path.join(options.dest,
+                                                    "bundles",
+                                                    "websphere",
+                                                    "Stores",
+                                                    "WebContent",
+                                                    widgets_folder,
+                                                    "images"));
+
+            mkdirp.sync(images_path);
+
+            var properties_path = path.normalize(path.join(options.dest,
+                                                           "bundles",
+                                                           "websphere",
+                                                           "Stores",
+                                                           "WebContent",
+                                                           widgets_folder,
+                                                           "Properties"));
+
+            mkdirp.sync(properties_path);
+
+            var text = "# --The following code is created as example. Modify the generated code and add any additional required code. --\n\
+\n\
+WidgetTypeDisplayText_"+ widget_name +"="+ toTitleCase(baseName) +" widget\n\
+\n\
+";
+
+            var dest = path.normalize(path.join(properties_path,
+                                                widget_name + "_text.properties"));
+
+            fs.writeFileSync(dest, text);
+
+            var dest = path.normalize(path.join(properties_path,
+                                                widget_name + "_text_en_US.properties"));
+
+            fs.writeFileSync(dest, text);
+
+          } catch (e) { console.log(e); }
+
+        } // end if
+
+      }
+
+    }
+
+	});
+
+/*
 	// sort materials object alphabetically
 	assembly.materials = sortObj(assembly.materials, 'order');
 
 	for (var collection in assembly.materials) {
 		assembly.materials[collection].items = sortObj(assembly.materials[collection].items, 'order');
 	}
-
+*/
 };
 
 
@@ -397,7 +775,8 @@ var parseDocs = function () {
 		// save each as unique prop
 		assembly.docs[id] = {
 			name: toTitleCase(id),
-			content: md.render(fs.readFileSync(file, 'utf-8'))
+			content: md.render(fs.readFileSync(file, 'utf-8')),
+			exclude: isExcluded(file)
 		};
 
 	});
@@ -438,6 +817,9 @@ var parseLayoutIncludes = function () {
 	files.forEach(function (file) {
 		var id = getName(file);
 		var content = fs.readFileSync(file, 'utf-8');
+
+    content = options.encloseInComments ? ("<!-- START '" + id + "' -->\n" + content + "\n<!-- END '" + id + "' -->\n") : content;
+
 		Handlebars.registerPartial(id, content);
 	});
 
@@ -481,7 +863,7 @@ var parseViews = function () {
 		var id = getName(file, true);
 
 		// determine if view is part of a collection (subdir)
-		var dirname = path.normalize(path.dirname(file)).split(path.sep).pop(),
+		var dirname = path.normalize(path.dirname(file)).split(/[/\\]/).pop(),
 			collection = (dirname !== options.keys.views) ? dirname : '';
 
 		var fileMatter = getMatter(file),
@@ -499,7 +881,9 @@ var parseViews = function () {
 			// store view data
 			assembly.views[collection].items[id] = {
 				name: toTitleCase(id),
-				data: fileData
+				data: fileData,
+				exclude: isExcluded(file),
+				updated: fileMatter.data.updated
 			};
 
 		}
@@ -549,9 +933,7 @@ var registerHelpers = function () {
 	 */
 	Handlebars.registerHelper(inflect.singularize(options.keys.materials), function (name, context, opts) {
 
-		// remove leading numbers from name keyword
-		// partials are always registered with the leading numbers removed
-		var key = name.replace(/(\d+[\-\.])+/, '');
+		var key = filterName(name);
 
 		// attempt to find pre-compiled partial
 		var template = Handlebars.partials[key],
@@ -569,12 +951,132 @@ var registerHelpers = function () {
 
 	});
 
+	/**
+	 * Custom helpers that are more fabricator-oriented than fabricator-assemble-oriented
+	 */
+
+	/**
+	 * `lang`
+	 * @description Given an object, this helper looks to see if "language" has been defined in
+   * globals.json and then checks to see if object[globals.language] exists; if so, return it,
+   * otherwise return the object passed in. This lets you structure data to have alternating
+   * values in case you need to quickly see your toolkit in a different language.
+	 * @example
+   *
+   * ---------------------------------------------------------------------------------------------
+   *
+   *   globals.json:
+   *
+   *     {"language" : "german"}
+   *
+   * ---------------------------------------------------------------------------------------------
+   *
+   *   data-example.json:
+   *
+   *     {"people" :
+   *       [{"name": {"english" : "Kevin", "german" : "Kevin [DE]"}},
+   *        {"name": {"english" : "Sally", "german" : "Sally [DE]"}},
+   *        {"name": "Ralph"},
+   *        {"name": {"english" : "Beth", "german" : "Beth [DE]"}}
+   *       ]
+   *     }
+   *
+   * ---------------------------------------------------------------------------------------------
+   *
+   *   data-populator.html:
+   *
+   *    <li>​
+   *      name: {{#if name }}{{ lang name }}{{ else }}Your Name{{/if}}
+   *    </li>​
+   *
+   * ---------------------------------------------------------------------------------------------
+   *
+   *   usage:
+   *
+   *    {{#each data-example.people}}​
+   *
+   *      {{> data-populator}}
+   *
+   *    {{/each}}
+   *
+   * ---------------------------------------------------------------------------------------------
+   *
+   *   output:
+   *
+   *    <li>
+   *      name: Kevin [DE]
+   *    </li>
+   *
+   *    <li>
+   *      name: Sally [DE]
+   *    </li>
+   *
+   *    <li>
+   *      name: Ralph
+   *    </li>
+   *
+   *    <li>
+   *      name: Beth [DE]
+   *    </li>
+   *
+   * ---------------------------------------------------------------------------------------------
+   */
+  Handlebars.registerHelper("lang", function (object) {
+
+    if (_.has(assembly.data, "globals") && _.has(assembly.data.globals, "language")) {
+
+      var lang = assembly.data.globals.language;
+
+      if (_.has(object, lang)) {
+
+        return object[lang];
+
+      } // end if
+
+    } // end if
+
+    return object;
+
+  });
+
+	/**
+	 * `data`
+	 * @description return assembly.data to isolate ONLY loaded data
+	 * @example
+   *
+   *   {{#with (data)}}
+   *
+   *     {{> material-name}}
+   *
+   *   {{/with}}
+   *
+   */
+	Handlebars.registerHelper("data", function () {
+
+    return assembly.data;
+
+	});
+
+	/**
+	 * `tot` ("this-or-that")
+	 * @description pass in a value and a default, return the default if value is empty
+	 * @example
+   *
+   *   {{ tot VARIABLE "Default Value" }}
+   *
+   */
+	Handlebars.registerHelper("tot", function (a, b) {
+
+    return a || b;
+
+	});
+
 };
 
 
 /**
  * Setup the assembly
- * @param  {Objet} options  User options
+ * @param  {Objet} options	User options
  */
 var setup = function (userOptions) {
 
@@ -610,7 +1112,7 @@ var assemble = function () {
 		var id = getName(file);
 
 		// build filePath
-		var dirname = path.normalize(path.dirname(file)).split(path.sep).pop(),
+		var dirname = path.normalize(path.dirname(file)).split(/[/\\]/).pop(),
 			collection = (dirname !== options.keys.views) ? dirname : '',
 			filePath = path.normalize(path.join(options.dest, collection, path.basename(file)));
 
@@ -619,7 +1121,7 @@ var assemble = function () {
 			pageContent = pageMatter.content;
 
 		if (collection) {
-			pageMatter.data.baseurl = '..';
+			pageMatter.data.baseurl = '../';
 		}
 
 		// template using Handlebars
@@ -633,7 +1135,7 @@ var assemble = function () {
 		}
 
 		// change extension to .html
-		filePath = filePath.replace(/\.[0-9a-z]+$/, '.html');
+		filePath = filterName(filePath.replace(/\.[0-9a-z]+$/, '.html'));
 
 		// write file
 		mkdirp.sync(path.dirname(filePath));
@@ -641,7 +1143,7 @@ var assemble = function () {
 
 		// write a copy file if custom dest-copy front-matter variable is defined
 		if (pageMatter.data['dest-copy']) {
-			var copyPath = path.normalize(pageMatter.data['dest-copy']);
+			var copyPath = filterName(path.normalize(pageMatter.data['dest-copy']));
 			mkdirp.sync(path.dirname(copyPath));
 			fs.writeFileSync(copyPath, template(context));
 		}
@@ -654,15 +1156,23 @@ var assemble = function () {
  * Module exports
  * @return {Object} Promise
  */
-module.exports = function (options) {
+module.exports = function (userOptions) {
 
 	try {
 
 		// setup assembly
-		setup(options);
+		setup(userOptions);
 
 		// assemble
 		assemble();
+
+    // delete modular css + js from catch-all folders
+    try {
+
+      rmdir(path.normalize(path.join(options.dest, "assets", "toolkit", "styles",  "bundles")), function (e) {});
+      rmdir(path.normalize(path.join(options.dest, "assets", "toolkit", "scripts", "bundles")), function (e) {});
+
+    } catch (e) { console.log(e); }
 
 	} catch(e) {
 		handleError(e);
