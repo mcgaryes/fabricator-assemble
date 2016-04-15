@@ -175,7 +175,7 @@ var assembly = {
  */
 var filterName = function (name, preserveNumbers) {
 	// replace spaces with dashes; remove excluding underscores; trim
-	return ((preserveNumbers) ? name : name.replace(/(^[0-9|\.\-]+|)(__|)/, '')).trim().replace(/\s/g, '-');
+	return ((preserveNumbers) ? name : name.replace(/(^[0-9|\.\-]+|)(__|)/g, '')).trim().replace(/\s/g, '-');
 };
 
 
